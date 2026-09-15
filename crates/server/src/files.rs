@@ -277,20 +277,12 @@ async fn charge<W>(
 where
     W: FnOnce() -> Response + Send + 'static,
 {
-    let Some(gate) = &state.gate else {
-        return Problem::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "payments_not_configured",
-            "this server has no UNBAKED_API_PAY_TO, so it cannot take payment",
-        )
-        .into_response();
-    };
     let quote = Quote {
         amount,
         cost: 0,
         resource,
     };
-    gate.charge(headers, &quote, || async move {
+    crate::take_payment(state, headers, &quote, || async move {
         match tokio::task::spawn_blocking(work).await {
             Ok(response) => response,
             Err(_) => Problem::new(
@@ -338,7 +330,7 @@ fn estimate_json(size: &Estimate) -> serde_json::Value {
     })
 }
 
-fn resource(path: &str, description: &str, mime_type: &str) -> Resource {
+pub(crate) fn resource(path: &str, description: &str, mime_type: &str) -> Resource {
     Resource {
         url: path.to_owned(),
         description: Some(description.to_owned()),
@@ -367,7 +359,7 @@ fn round(db: f64) -> Option<f64> {
     db.is_finite().then(|| (db * 10.0).round() / 10.0)
 }
 
-fn bad_request(detail: impl Into<String>) -> Response {
+pub(crate) fn bad_request(detail: impl Into<String>) -> Response {
     Problem::new(StatusCode::BAD_REQUEST, "bad_request", detail).into_response()
 }
 

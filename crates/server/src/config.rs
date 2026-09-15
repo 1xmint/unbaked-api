@@ -38,6 +38,28 @@ pub struct Config {
     pub pay_to: Option<String>,
     /// The most provider cost allowed per UTC day, in millionths of a dollar.
     pub daily_cap: u64,
+    /// OpenAI's key. Picture routes refuse without it.
+    pub openai_key: Option<Secret>,
+}
+
+/// A key: usable, but never printed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Secret(hidden)")
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -142,6 +164,7 @@ impl Config {
             facilitator,
             pay_to,
             daily_cap,
+            openai_key: get("OPENAI_API_KEY").map(Secret::new),
         })
     }
 }
@@ -170,6 +193,19 @@ fn is_evm_address(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_are_never_printed() {
+        let config = Config::from_lookup(|name| {
+            (name == "OPENAI_API_KEY").then(|| "sk-do-not-print".to_owned())
+        })
+        .unwrap();
+        assert_eq!(
+            config.openai_key.as_ref().unwrap().expose(),
+            "sk-do-not-print"
+        );
+        assert!(!format!("{config:?}").contains("do-not-print"));
+    }
 
     const PAY_TO: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 

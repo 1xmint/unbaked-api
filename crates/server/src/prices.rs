@@ -4,6 +4,13 @@
 //! the time it should take, from layer 1's `estimate`: about 0.66 ms per work
 //! unit, the one rate measured so far (an image on the layer 1 bench). Measure
 //! sound and video before real money.
+//!
+//! AI calls are priced from what the provider will charge us (the `cost`,
+//! which counts against the daily cap) plus a margin. OpenAI bills pictures by
+//! token: $5 per million text tokens in, $8 per million picture tokens in, $30
+//! per million picture tokens out (pricing page, 2026-09-14).
+
+use crate::providers::Quality;
 
 /// The least any paid call costs: half a cent.
 pub const FLOOR: u64 = 5_000;
@@ -16,6 +23,53 @@ pub const PER_MS: u64 = 1;
 
 /// An edit changes JSON and packs files; it costs the floor.
 pub const EDIT: u64 = FLOOR;
+
+/// Our margin over provider cost, in percent.
+pub const MARGIN_PERCENT: u64 = 25;
+
+/// What one 1024×1024 picture costs us from OpenAI at each quality. From a
+/// third-party calculation that matches the token prices; the live test
+/// prints real token counts to check it.
+pub const PICTURE_1024: [(Quality, u64); 3] = [
+    (Quality::Low, 6_000),
+    (Quality::Medium, 53_000),
+    (Quality::High, 211_000),
+];
+
+/// Text in: $5 per million tokens, counting a token for every 3 characters
+/// (English runs nearer 4).
+pub const PER_PROMPT_TOKEN: u64 = 5;
+pub const CHARS_PER_TOKEN: u64 = 3;
+
+/// A source picture in an edit: 6,000 picture tokens at $8 per million. Not
+/// measured; the live test checks it.
+pub const PER_SOURCE_PICTURE: u64 = 48_000;
+
+/// The price for a provider cost: cost plus margin, never under the floor.
+pub fn with_margin(cost: u64) -> u64 {
+    cost.saturating_mul(100 + MARGIN_PERCENT)
+        .div_ceil(100)
+        .max(FLOOR)
+}
+
+/// What OpenAI will charge us for one picture: output by size and quality,
+/// the prompt, and any source pictures.
+pub fn picture_cost(
+    quality: Quality,
+    width: u32,
+    height: u32,
+    prompt_chars: usize,
+    sources: usize,
+) -> u64 {
+    let base = PICTURE_1024
+        .iter()
+        .find(|(q, _)| *q == quality)
+        .map_or(0, |(_, cost)| *cost);
+    let pixels = u64::from(width) * u64::from(height);
+    let output = (base * pixels).div_ceil(1024 * 1024);
+    let prompt = (prompt_chars as u64).div_ceil(CHARS_PER_TOKEN) * PER_PROMPT_TOKEN;
+    output + prompt + sources as u64 * PER_SOURCE_PICTURE
+}
 
 /// The price of file work of this size.
 pub fn file_work(work_units: u64) -> u64 {
@@ -33,5 +87,15 @@ mod tests {
         assert_eq!(file_work(1_000), FLOOR);
         assert_eq!(file_work(100_000), 66_000);
         assert!(file_work(u64::MAX) > FLOOR);
+    }
+
+    #[test]
+    fn a_picture_costs_its_size_and_quality_plus_the_margin() {
+        assert_eq!(picture_cost(Quality::Medium, 1024, 1024, 0, 0), 53_000);
+        // Twice the pixels, twice the output; 30 characters is 10 tokens.
+        assert_eq!(picture_cost(Quality::High, 2048, 1024, 30, 0), 422_050);
+        assert_eq!(picture_cost(Quality::Low, 1024, 1024, 0, 2), 102_000);
+        assert_eq!(with_margin(53_000), 66_250);
+        assert_eq!(with_margin(1), FLOOR);
     }
 }

@@ -142,3 +142,10 @@ No Coinbase key is needed until the move to real money.
 - **Prices live in code** (`crates/server/src/prices.rs`), not a `prices.toml`. File work costs 1 millionth of a USDC per estimated millisecond at 0.66 ms per work unit, with a floor of $0.005. 0.66 is the only bench rate on record (an image); sound and video rates must be measured before real money.
 - **Fonts:** the server has no font folder, so recipes that reference fonts by SHA-256 fail with `font_not_found`; packed fonts work.
 - **Base (real money) terms** use USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` with EIP-712 name "USD Coin" version 2, from memory. Check against the contract before real money; a wrong name only makes payments fail verification.
+
+## PR 4: OpenAI pictures (2026-09-14)
+
+- `POST /v1/images/generate` (JSON) and `/v1/images/edit` (multipart: `prompt`, 1 to 16 `image`, optional `mask`), both on `gpt-image-2-2026-04-21`. Settings: `size` (default 1024x1024, OpenAI's custom-size rules checked before any price), `quality` low, medium or high (default medium; `auto` is refused because it cannot be priced in advance), `format` png or webp, `background`.
+- **Price = what OpenAI will charge us + 25%, floor $0.005.** Our cost counts against the daily cap. Output at 1024×1024: $0.006 low, $0.053 medium, $0.211 high, scaled by pixels; prompt at $5 per million tokens counting one token per 3 characters; each edit source picture 6,000 tokens at $8 per million ($0.048), not yet measured. The server logs OpenAI's token counts (never the prompt) after each picture, and the `#[ignore]` live test prints them against the table.
+- Provider failures are never settled: a refusal (OpenAI 4xx) passes OpenAI's message on as 422 `provider_refused`; key or balance problems are 503 `provider_unavailable` with no detail; 429 is 503 `provider_busy`; anything else is 502 `provider_failed`.
+- *Response shape checked* (API reference, 2026-09-14): `data[0].b64_json` plus `usage.input_tokens_details.{text_tokens,image_tokens}` and `usage.output_tokens`. *Not checked:* that the edit endpoint takes the multipart name `image[]`; the live edit call settles it in PR 7.

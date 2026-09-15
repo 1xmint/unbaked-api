@@ -135,3 +135,10 @@ All values go in a `.env` file at the repo root, which git ignores. Copy
    money in it.
 
 No Coinbase key is needed until the move to real money.
+
+## PR 3: file endpoints (2026-09-14)
+
+- **Renders run in the server process**, on a blocking thread with render limits and a deadline, not as an `unbaked` child process. Layer 1 checks its deadline between rows, layers, frames and sound chunks, and the server's limits (36 million pixels per buffer, 10 minutes of stereo) bound memory. This saves shipping and locating a second binary. Revisit before hosting strangers' jobs: a child process can be killed outright.
+- **Prices live in code** (`crates/server/src/prices.rs`), not a `prices.toml`. File work costs 1 millionth of a USDC per estimated millisecond at 0.66 ms per work unit, with a floor of $0.005. 0.66 is the only bench rate on record (an image); sound and video rates must be measured before real money.
+- **Fonts:** the server has no font folder, so recipes that reference fonts by SHA-256 fail with `font_not_found`; packed fonts work.
+- **Base (real money) terms** use USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` with EIP-712 name "USD Coin" version 2, from memory. Check against the contract before real money; a wrong name only makes payments fail verification.

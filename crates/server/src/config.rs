@@ -9,6 +9,9 @@ pub const DEFAULT_ADDR: &str = "127.0.0.1:8402";
 /// The free public facilitator, which needs no key. Test network only.
 pub const TEST_FACILITATOR: &str = "https://x402.org/facilitator";
 
+/// The most provider cost allowed per UTC day unless set: $5.
+pub const DEFAULT_DAILY_CAP: u64 = 5_000_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Network {
     BaseSepolia,
@@ -33,6 +36,8 @@ pub struct Config {
     pub facilitator: String,
     /// Where payments go. Paid routes refuse to run without it.
     pub pay_to: Option<String>,
+    /// The most provider cost allowed per UTC day, in millionths of a dollar.
+    pub daily_cap: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -43,6 +48,7 @@ pub enum ConfigError {
     BadAddr(String),
     BadFacilitator(String),
     BadPayTo(String),
+    BadDailyCap(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -65,6 +71,10 @@ impl fmt::Display for ConfigError {
             Self::BadPayTo(value) => write!(
                 f,
                 "UNBAKED_API_PAY_TO {value:?} is not an EVM address (0x and 40 hex digits)"
+            ),
+            Self::BadDailyCap(value) => write!(
+                f,
+                "UNBAKED_API_DAILY_CAP_USD {value:?} is not a dollar amount like 5 or 2.50"
             ),
         }
     }
@@ -121,13 +131,34 @@ impl Config {
             _ => {}
         }
 
+        let daily_cap = match get("UNBAKED_API_DAILY_CAP_USD") {
+            None => DEFAULT_DAILY_CAP,
+            Some(value) => micro_dollars(&value).ok_or(ConfigError::BadDailyCap(value))?,
+        };
+
         Ok(Self {
             addr,
             network,
             facilitator,
             pay_to,
+            daily_cap,
         })
     }
+}
+
+/// "2.50" as 2_500_000. At most six decimals.
+fn micro_dollars(value: &str) -> Option<u64> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if whole.is_empty() || !digits(whole) || !digits(fraction) || fraction.len() > 6 {
+        return None;
+    }
+    let fraction = format!("{fraction:0<6}").parse::<u64>().ok()?;
+    whole
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(1_000_000)?
+        .checked_add(fraction)
 }
 
 fn is_evm_address(value: &str) -> bool {
@@ -149,6 +180,18 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| (*value).to_owned())
         })
+    }
+
+    #[test]
+    fn the_daily_cap_is_read_in_dollars() {
+        assert_eq!(load(&[]).unwrap().daily_cap, DEFAULT_DAILY_CAP);
+        let cap = |value| load(&[("UNBAKED_API_DAILY_CAP_USD", value)]).map(|c| c.daily_cap);
+        assert_eq!(cap("2.5"), Ok(2_500_000));
+        assert_eq!(cap("0.000001"), Ok(1));
+        assert_eq!(cap("12"), Ok(12_000_000));
+        for bad in ["-1", "1.0000001", "$5", ".5", "5e3"] {
+            assert_eq!(cap(bad), Err(ConfigError::BadDailyCap(bad.to_owned())));
+        }
     }
 
     #[test]

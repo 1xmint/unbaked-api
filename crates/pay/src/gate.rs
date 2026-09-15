@@ -42,6 +42,10 @@ const SPENT_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 /// Base Sepolia's USDC contract.
 pub const BASE_SEPOLIA_USDC: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
+/// USDC on Base. Its EIP-712 name differs from the test token's; check both
+/// against the contract before real money.
+pub const BASE_USDC: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
 /// Where and how payments are taken.
 #[derive(Clone, Debug)]
 pub struct Terms {
@@ -74,6 +78,16 @@ impl Terms {
             pay_to: pay_to.to_owned(),
             max_timeout_seconds: 600,
             daily_cap,
+        }
+    }
+
+    /// USDC on Base: real money.
+    pub fn base(pay_to: &str, daily_cap: u64) -> Self {
+        Self {
+            network: "eip155:8453".to_owned(),
+            asset: BASE_USDC.to_owned(),
+            asset_name: "USD Coin".to_owned(),
+            ..Self::base_sepolia(pay_to, daily_cap)
         }
     }
 }

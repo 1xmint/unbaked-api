@@ -9,8 +9,8 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use serde_json::Value;
 use tower::ServiceExt;
-use unbaked_api::app_with;
 use unbaked_api::config::Config;
+use unbaked_api::{Services, app_with};
 use unbaked_core::pack;
 use unbaked_core::package::Limits;
 use unbaked_pay::fake::FakeFacilitator;
@@ -33,7 +33,11 @@ fn server(pay_to: Option<&str>) -> (Router, Arc<FakeFacilitator>) {
     })
     .unwrap();
     let fake = Arc::new(FakeFacilitator::new());
-    (app_with(config, Some(fake.clone())), fake)
+    let services = Services {
+        facilitator: Some(fake.clone()),
+        ..Services::default()
+    };
+    (app_with(config, services), fake)
 }
 
 /// A request to `uri`; `content_type` and `body` are reused for the paid retry.

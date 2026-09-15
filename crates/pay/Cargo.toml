@@ -1,0 +1,28 @@
+[package]
+name = "unbaked-pay"
+description = "The x402 payment gate: verify, do the work, settle only on success"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# A facilitator that answers from memory, for tests here and in the server.
+fake = []
+
+[dependencies]
+axum = { version = "0.8.9", default-features = false }
+base64 = "0.22.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+unbaked-pay = { path = ".", features = ["fake"] }
+
+[lints]
+workspace = true

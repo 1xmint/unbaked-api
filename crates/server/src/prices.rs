@@ -10,7 +10,7 @@
 //! token: $5 per million text tokens in, $8 per million picture tokens in, $30
 //! per million picture tokens out (pricing page, 2026-09-14).
 
-use crate::providers::Quality;
+use crate::providers::{Quality, VoiceModel};
 
 /// The least any paid call costs: half a cent.
 pub const FLOOR: u64 = 5_000;
@@ -45,6 +45,17 @@ pub const CHARS_PER_TOKEN: u64 = 3;
 /// measured; the live test checks it.
 pub const PER_SOURCE_PICTURE: u64 = 48_000;
 
+/// ElevenLabs speech per character: $0.10 per 1,000 for multilingual v2 and
+/// v3, $0.05 for flash v2.5 (API pricing page, 2026-09-14).
+pub const SPEECH_PER_CHAR: [(VoiceModel, u64); 3] = [
+    (VoiceModel::MultilingualV2, 100),
+    (VoiceModel::V3, 100),
+    (VoiceModel::FlashV2_5, 50),
+];
+
+/// ElevenLabs music: $0.15 per minute, which is 2.5 millionths per millisecond.
+pub const MUSIC_PER_MINUTE: u64 = 150_000;
+
 /// The price for a provider cost: cost plus margin, never under the floor.
 pub fn with_margin(cost: u64) -> u64 {
     cost.saturating_mul(100 + MARGIN_PERCENT)
@@ -69,6 +80,20 @@ pub fn picture_cost(
     let output = (base * pixels).div_ceil(1024 * 1024);
     let prompt = (prompt_chars as u64).div_ceil(CHARS_PER_TOKEN) * PER_PROMPT_TOKEN;
     output + prompt + sources as u64 * PER_SOURCE_PICTURE
+}
+
+/// What ElevenLabs will charge us to say `chars` characters.
+pub fn speech_cost(model: VoiceModel, chars: usize) -> u64 {
+    let per_char = SPEECH_PER_CHAR
+        .iter()
+        .find(|(m, _)| *m == model)
+        .map_or(0, |(_, cost)| *cost);
+    per_char * chars as u64
+}
+
+/// What ElevenLabs will charge us for `length_ms` of music.
+pub fn music_cost(length_ms: u32) -> u64 {
+    (u64::from(length_ms) * MUSIC_PER_MINUTE).div_ceil(60_000)
 }
 
 /// The price of file work of this size.
@@ -97,5 +122,14 @@ mod tests {
         assert_eq!(picture_cost(Quality::Low, 1024, 1024, 0, 2), 102_000);
         assert_eq!(with_margin(53_000), 66_250);
         assert_eq!(with_margin(1), FLOOR);
+    }
+
+    #[test]
+    fn sound_costs_characters_or_seconds() {
+        assert_eq!(speech_cost(VoiceModel::MultilingualV2, 1_000), 100_000);
+        assert_eq!(speech_cost(VoiceModel::FlashV2_5, 1_000), 50_000);
+        assert_eq!(music_cost(60_000), 150_000);
+        assert_eq!(music_cost(10_000), 25_000);
+        assert_eq!(music_cost(1), 3);
     }
 }

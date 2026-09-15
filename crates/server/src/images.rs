@@ -6,14 +6,13 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{Multipart, State};
+use axum::http::HeaderMap;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use unbaked_pay::Quote;
 
 use crate::files::{bad_request, resource};
-use crate::problem::Problem;
 use crate::providers::{
     Background, EditJob, Picture, PictureFormat, PictureJob, Pictures, ProviderError, Quality,
 };
@@ -234,14 +233,10 @@ pub async fn edit_route(
 /// The picture service, or 503 before any price is asked.
 fn service(state: &AppState) -> Result<Arc<dyn Pictures>, Box<Response>> {
     state.pictures.clone().ok_or_else(|| {
-        Box::new(
-            Problem::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "provider_not_configured",
-                "this server has no OPENAI_API_KEY, so it cannot make pictures",
-            )
-            .into_response(),
-        )
+        Box::new(crate::providers::not_configured(
+            "OPENAI_API_KEY",
+            "pictures",
+        ))
     })
 }
 
@@ -281,30 +276,7 @@ fn answer(
 }
 
 fn provider_problem(route: &'static str, error: ProviderError) -> Response {
-    let (status, code, detail) = match &error {
-        ProviderError::Refused(message) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "provider_refused",
-            message.clone(),
-        ),
-        ProviderError::Account => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "provider_unavailable",
-            "the picture service is not available on this server right now".to_owned(),
-        ),
-        ProviderError::Busy => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "provider_busy",
-            "the picture service is busy; try again shortly".to_owned(),
-        ),
-        ProviderError::Failed(message) => {
-            (StatusCode::BAD_GATEWAY, "provider_failed", message.clone())
-        }
-    };
-    if !matches!(error, ProviderError::Refused(_)) {
-        tracing::warn!(route, %error, "picture call failed");
-    }
-    Problem::new(status, code, format!("{detail}; nothing was charged")).into_response()
+    crate::providers::problem("picture", route, error)
 }
 
 #[cfg(test)]

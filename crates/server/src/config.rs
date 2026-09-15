@@ -40,6 +40,8 @@ pub struct Config {
     pub daily_cap: u64,
     /// OpenAI's key. Picture routes refuse without it.
     pub openai_key: Option<Secret>,
+    /// ElevenLabs' key. Speech and music routes refuse without it.
+    pub elevenlabs_key: Option<Secret>,
 }
 
 /// A key: usable, but never printed.
@@ -165,6 +167,7 @@ impl Config {
             pay_to,
             daily_cap,
             openai_key: get("OPENAI_API_KEY").map(Secret::new),
+            elevenlabs_key: get("ELEVENLABS_API_KEY").map(Secret::new),
         })
     }
 }
@@ -196,13 +199,19 @@ mod tests {
 
     #[test]
     fn keys_are_never_printed() {
-        let config = Config::from_lookup(|name| {
-            (name == "OPENAI_API_KEY").then(|| "sk-do-not-print".to_owned())
+        let config = Config::from_lookup(|name| match name {
+            "OPENAI_API_KEY" => Some("sk-do-not-print".to_owned()),
+            "ELEVENLABS_API_KEY" => Some("xi-do-not-print".to_owned()),
+            _ => None,
         })
         .unwrap();
         assert_eq!(
             config.openai_key.as_ref().unwrap().expose(),
             "sk-do-not-print"
+        );
+        assert_eq!(
+            config.elevenlabs_key.as_ref().unwrap().expose(),
+            "xi-do-not-print"
         );
         assert!(!format!("{config:?}").contains("do-not-print"));
     }

@@ -4,6 +4,11 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+
+use crate::problem::Problem;
+
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,9 +160,125 @@ impl fmt::Display for ProviderError {
     }
 }
 
+/// A provider failure as problem+json. Every one is an error status, so the
+/// payment is never settled. `service` names it for the caller ("picture").
+pub fn problem(service: &str, route: &'static str, error: ProviderError) -> Response {
+    let (status, code, detail) = match &error {
+        ProviderError::Refused(message) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "provider_refused",
+            message.clone(),
+        ),
+        ProviderError::Account => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider_unavailable",
+            format!("the {service} service is not available on this server right now"),
+        ),
+        ProviderError::Busy => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider_busy",
+            format!("the {service} service is busy; try again shortly"),
+        ),
+        ProviderError::Failed(message) => {
+            (StatusCode::BAD_GATEWAY, "provider_failed", message.clone())
+        }
+    };
+    if !matches!(error, ProviderError::Refused(_)) {
+        tracing::warn!(route, %error, "provider call failed");
+    }
+    Problem::new(status, code, format!("{detail}; nothing was charged")).into_response()
+}
+
+/// 503 for a service with no key, before any price is asked.
+pub fn not_configured(key: &str, what: &str) -> Response {
+    Problem::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "provider_not_configured",
+        format!("this server has no {key}, so it cannot make {what}"),
+    )
+    .into_response()
+}
+
 pub trait Pictures: Send + Sync {
     fn generate(&self, job: PictureJob) -> BoxFuture<'_, Result<Picture, ProviderError>>;
     fn edit(&self, job: EditJob) -> BoxFuture<'_, Result<Picture, ProviderError>>;
+}
+
+/// ElevenLabs speech models we sell, each with its own limit and price.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceModel {
+    MultilingualV2,
+    V3,
+    FlashV2_5,
+}
+
+impl VoiceModel {
+    pub const ALL: [Self; 3] = [Self::MultilingualV2, Self::V3, Self::FlashV2_5];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|model| model.id() == value)
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::MultilingualV2 => "eleven_multilingual_v2",
+            Self::V3 => "eleven_v3",
+            Self::FlashV2_5 => "eleven_flash_v2_5",
+        }
+    }
+
+    /// The most characters ElevenLabs takes in one request.
+    pub fn max_chars(self) -> usize {
+        match self {
+            Self::MultilingualV2 => 10_000,
+            Self::V3 => 5_000,
+            Self::FlashV2_5 => 40_000,
+        }
+    }
+}
+
+/// Words to say.
+#[derive(Clone, Debug)]
+pub struct SpeechJob {
+    pub text: String,
+    pub voice_id: String,
+    pub model: VoiceModel,
+    pub language_code: Option<String>,
+    pub seed: Option<u32>,
+}
+
+/// Music to compose.
+#[derive(Clone, Debug)]
+pub struct MusicJob {
+    pub prompt: String,
+    pub length_ms: u32,
+    pub instrumental: bool,
+    pub seed: Option<u32>,
+}
+
+/// A voice the caller may pick.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Voice {
+    pub voice_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub labels: serde_json::Value,
+}
+
+/// Whether `bytes` look like MP3: an ID3 tag or an MPEG frame header.
+pub fn is_mp3(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"ID3") || (bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] & 0xE0 == 0xE0)
+}
+
+pub trait Sounds: Send + Sync {
+    /// MP3 bytes.
+    fn speech(&self, job: SpeechJob) -> BoxFuture<'_, Result<Vec<u8>, ProviderError>>;
+    /// MP3 bytes.
+    fn music(&self, job: MusicJob) -> BoxFuture<'_, Result<Vec<u8>, ProviderError>>;
+    fn voices(&self) -> BoxFuture<'_, Result<Vec<Voice>, ProviderError>>;
 }
 
 #[cfg(feature = "fake")]
@@ -212,6 +333,72 @@ pub mod fake {
                     usage: Some(Usage::default()),
                 }),
             }
+        }
+    }
+
+    /// One silent MPEG-1 Layer III frame (128 kbit/s, 44.1 kHz).
+    pub fn tiny_mp3() -> Vec<u8> {
+        let mut frame = vec![0; 417];
+        frame[..4].copy_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+        frame
+    }
+
+    #[derive(Default)]
+    pub struct FakeSounds {
+        refusal: Mutex<Option<ProviderError>>,
+        speeches: Mutex<Vec<SpeechJob>>,
+        songs: Mutex<Vec<MusicJob>>,
+    }
+
+    impl FakeSounds {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Every later call fails with `error`.
+        pub fn fail_with(&self, error: ProviderError) {
+            *self.refusal.lock().unwrap() = Some(error);
+        }
+
+        pub fn speeches(&self) -> Vec<SpeechJob> {
+            self.speeches.lock().unwrap().clone()
+        }
+
+        pub fn songs(&self) -> Vec<MusicJob> {
+            self.songs.lock().unwrap().clone()
+        }
+
+        fn answer(&self) -> Result<Vec<u8>, ProviderError> {
+            match self.refusal.lock().unwrap().clone() {
+                Some(error) => Err(error),
+                None => Ok(tiny_mp3()),
+            }
+        }
+    }
+
+    impl Sounds for FakeSounds {
+        fn speech(&self, job: SpeechJob) -> BoxFuture<'_, Result<Vec<u8>, ProviderError>> {
+            self.speeches.lock().unwrap().push(job);
+            Box::pin(async move { self.answer() })
+        }
+
+        fn music(&self, job: MusicJob) -> BoxFuture<'_, Result<Vec<u8>, ProviderError>> {
+            self.songs.lock().unwrap().push(job);
+            Box::pin(async move { self.answer() })
+        }
+
+        fn voices(&self) -> BoxFuture<'_, Result<Vec<Voice>, ProviderError>> {
+            Box::pin(async move {
+                self.answer().map(|_| {
+                    vec![Voice {
+                        voice_id: "fake-voice".to_owned(),
+                        name: "Fake".to_owned(),
+                        category: Some("premade".to_owned()),
+                        description: None,
+                        labels: serde_json::json!({ "accent": "none" }),
+                    }]
+                })
+            })
         }
     }
 

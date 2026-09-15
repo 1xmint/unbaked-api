@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # The layer 1 commit this server is built against.
+  UNBAKED_REV: fb1dfbf963b00587e70f0756ebbd5693915b8030
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test --workspace
+
+  # The guide served at /v1/guide is a copy of layer 1's; it must not drift.
+  guide:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          curl -fsSL "https://raw.githubusercontent.com/1xmint/unbaked/$UNBAKED_REV/docs/agents.md" -o "$RUNNER_TEMP/agents.md"
+          diff -u "$RUNNER_TEMP/agents.md" crates/server/guide/agents.md
+
+  # No secrets in git: the .env file never, and no key-shaped values anywhere.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          if git ls-files | grep -E '(^|/)\.env$'; then
+            echo "a .env file is committed"; exit 1
+          fi
+          # Transaction hashes have a private key's shape; only the test record lists them.
+          if git grep -nE '(sk-[A-Za-z0-9_-]{20,}|0x[0-9a-fA-F]{64}\b)' -- . ':!Cargo.lock' ':!docs/first-test.md'; then
+            echo "something shaped like a key is committed"; exit 1
+          fi
+
+  # Single required check for branch protection, so the job list can change freely.
+  ci-ok:
+    if: always()
+    needs: [lint, test, guide, secrets]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            exit 1
+          fi

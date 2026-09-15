@@ -1,6 +1,7 @@
 //! The HTTP server: routes, and the layers every request passes through.
 
 pub mod config;
+pub mod elevenlabs;
 pub mod files;
 pub mod idempotency;
 pub mod images;
@@ -8,6 +9,7 @@ pub mod openai;
 pub mod prices;
 pub mod problem;
 pub mod providers;
+pub mod sounds;
 
 use std::sync::Arc;
 
@@ -20,10 +22,11 @@ use axum::{Json, Router, middleware};
 use unbaked_pay::{Facilitator, Gate, HttpFacilitator, Quote, Terms};
 
 use crate::config::{Config, Network};
+use crate::elevenlabs::ElevenLabs;
 use crate::idempotency::IdempotencyStore;
 use crate::openai::OpenAi;
 use crate::problem::Problem;
-use crate::providers::Pictures;
+use crate::providers::{Pictures, Sounds};
 
 /// The payment gate, over whichever facilitator the server was given.
 pub type PayGate = Gate<Arc<dyn Facilitator>>;
@@ -36,6 +39,8 @@ pub struct AppState {
     pub gate: Option<Arc<PayGate>>,
     /// `None` without an OpenAI key: picture routes answer 503.
     pub pictures: Option<Arc<dyn Pictures>>,
+    /// `None` without an ElevenLabs key: sound routes answer 503.
+    pub sounds: Option<Arc<dyn Sounds>>,
 }
 
 /// The outside services the server calls. Tests pass fakes.
@@ -43,6 +48,7 @@ pub struct AppState {
 pub struct Services {
     pub facilitator: Option<Arc<dyn Facilitator>>,
     pub pictures: Option<Arc<dyn Pictures>>,
+    pub sounds: Option<Arc<dyn Sounds>>,
 }
 
 /// The largest request body accepted, in bytes.
@@ -64,6 +70,12 @@ pub fn app(config: Config) -> Router {
         match OpenAi::new(key.expose()) {
             Ok(client) => services.pictures = Some(Arc::new(client)),
             Err(error) => tracing::error!(%error, "cannot build the OpenAI client"),
+        }
+    }
+    if let Some(key) = &config.elevenlabs_key {
+        match ElevenLabs::new(key.expose()) {
+            Ok(client) => services.sounds = Some(Arc::new(client)),
+            Err(error) => tracing::error!(%error, "cannot build the ElevenLabs client"),
         }
     }
     app_with(config, services)
@@ -98,6 +110,7 @@ pub fn routes_with(config: Config, services: Services) -> Router {
         config: Arc::new(config),
         gate,
         pictures: services.pictures,
+        sounds: services.sounds,
     };
     Router::new()
         .route("/health", get(health))
@@ -109,6 +122,9 @@ pub fn routes_with(config: Config, services: Services) -> Router {
         .route("/v1/render", post(files::render_route))
         .route("/v1/images/generate", post(images::generate_route))
         .route("/v1/images/edit", post(images::edit_route))
+        .route("/v1/speech", post(sounds::speech_route))
+        .route("/v1/speech/voices", get(sounds::voices_route))
+        .route("/v1/music", post(sounds::music_route))
         .with_state(state)
 }
 
@@ -151,6 +167,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "network": state.config.network.caip2(),
         "payments": state.gate.is_some(),
         "pictures": state.pictures.is_some(),
+        "sounds": state.sounds.is_some(),
     }))
 }
 

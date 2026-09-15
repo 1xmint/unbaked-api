@@ -42,6 +42,7 @@ fn server(daily_cap: Option<&str>) -> Server {
     let services = Services {
         facilitator: Some(payments.clone()),
         pictures: Some(pictures.clone()),
+        ..Services::default()
     };
     Server {
         app: app_with(config, services),
@@ -228,7 +229,7 @@ async fn without_an_openai_key_picture_routes_refuse() {
             .unwrap();
     let services = Services {
         facilitator: Some(Arc::new(FakeFacilitator::new())),
-        pictures: None,
+        ..Services::default()
     };
     let app = app_with(config, services);
     let response = Call::generate(json!({ "prompt": "x" }))

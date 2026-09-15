@@ -586,7 +586,7 @@ impl Server {
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::from_build_env())
+            .with_server_info(Implementation::new("unbaked", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Make pictures and sounds by paying the unbaked-api server with x402 (needs \
                  UNBAKED_WALLET_KEY and stays under UNBAKED_SESSION_CAP_USD), and do Unbaked \

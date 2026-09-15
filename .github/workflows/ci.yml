@@ -60,6 +60,7 @@ jobs:
       - run: |
           curl -fsSL "https://raw.githubusercontent.com/1xmint/unbaked/$UNBAKED_REV/docs/agents.md" -o "$RUNNER_TEMP/agents.md"
           diff -u "$RUNNER_TEMP/agents.md" crates/server/guide/agents.md
+          diff -u "$RUNNER_TEMP/agents.md" crates/mcp/guide.md
 
   # No secrets in git: the .env file never, and no key-shaped values anywhere.
   secrets:

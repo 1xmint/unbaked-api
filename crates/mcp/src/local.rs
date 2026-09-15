@@ -73,8 +73,7 @@ pub fn save(
         let original =
             std::fs::read(input).map_err(|error| format!("{}: {error}", input.display()))?;
         let package = pack::write(after, Limits::default()).map_err(|error| error.to_string())?;
-        let result =
-            pack::with_package(&original, &package).map_err(|error| error.to_string())?;
+        let result = pack::with_package(&original, &package).map_err(|error| error.to_string())?;
         write_replacing(target, &result)?;
     }
     Ok(json!({ "ok": true, "output": target.display().to_string() }))
@@ -99,8 +98,8 @@ pub fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 pub fn check(path: &Path) -> Result<Json, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let opened = open(&bytes, Limits::default())
-        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let opened =
+        open(&bytes, Limits::default()).map_err(|error| format!("{}: {error}", path.display()))?;
     let status = opened.check();
     let mut report = json!({ "ok": true });
     if let (Some(all), Json::Object(fields)) = (report.as_object_mut(), status_json(&status)) {

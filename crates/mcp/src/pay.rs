@@ -3,7 +3,8 @@
 //! The flow: send the request unpaid; if it is not a 402, that is the answer.
 //! Otherwise read `PAYMENT-REQUIRED` ourselves, refuse a network we will not
 //! pay on, reserve the price from the session budget before signing anything,
-//! sign and resend. A 2xx spends the reservation; anything else releases it.
+//! sign and resend. A 2xx spends the reservation; an error answer releases it
+//! (the server settles only on success); no answer at all spends it.
 
 use std::sync::Arc;
 
@@ -55,7 +56,11 @@ pub enum PayError {
     NoWallet,
     /// The price, what is left in the session, and the session cap, all in
     /// micro-USDC.
-    OverBudget { price: u64, remaining: u64, cap: u64 },
+    OverBudget {
+        price: u64,
+        remaining: u64,
+        cap: u64,
+    },
     UnsupportedNetwork,
     Http(String),
     Sign(String),
@@ -67,7 +72,11 @@ impl PayError {
             Self::NoWallet => {
                 "this tool has no UNBAKED_WALLET_KEY, so it cannot pay for this".to_owned()
             }
-            Self::OverBudget { price, remaining, cap } => format!(
+            Self::OverBudget {
+                price,
+                remaining,
+                cap,
+            } => format!(
                 "this call costs ${}, but only ${} is left of the ${} session cap \
                  (UNBAKED_SESSION_CAP_USD); nothing was charged",
                 dollars(*price),
@@ -91,9 +100,9 @@ struct OnlyOurNetwork {
 
 impl PaymentSelector for OnlyOurNetwork {
     fn select<'a>(&self, candidates: &'a [PaymentCandidate]) -> Option<&'a PaymentCandidate> {
-        candidates
-            .iter()
-            .find(|c| c.chain_id.to_string() == NETWORK && c.scheme == SCHEME && c.amount <= self.max)
+        candidates.iter().find(|c| {
+            c.chain_id.to_string() == NETWORK && c.scheme == SCHEME && c.amount <= self.max
+        })
     }
 }
 
@@ -125,7 +134,12 @@ impl Payer {
     }
 
     /// POSTs `body`, paying if the server asks for it.
-    pub async fn post(&self, path: &str, content_type: &str, body: Vec<u8>) -> Result<Paid, PayError> {
+    pub async fn post(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<Paid, PayError> {
         let url = format!("{}{}", self.api_url, path);
         let first = self
             .http
@@ -142,11 +156,14 @@ impl Payer {
 
         let wallet = self.wallet.clone().ok_or(PayError::NoWallet)?;
         let amount = required_amount(&first)?;
-        let reservation = self.budget.reserve(amount).map_err(|remaining| PayError::OverBudget {
-            price: amount,
-            remaining,
-            cap: self.budget.cap(),
-        })?;
+        let reservation =
+            self.budget
+                .reserve(amount)
+                .map_err(|remaining| PayError::OverBudget {
+                    price: amount,
+                    remaining,
+                    cap: self.budget.cap(),
+                })?;
 
         let client = X402Client::new()
             .register(V2Eip155ExactClient::new(wallet))
@@ -158,14 +175,28 @@ impl Payer {
             .await
             .map_err(|error| PayError::Sign(error.to_string()))?;
 
-        let mut request = self.http.post(&url).header(CONTENT_TYPE, content_type).body(body);
+        let mut request = self
+            .http
+            .post(&url)
+            .header(CONTENT_TYPE, content_type)
+            .body(body);
         for (name, value) in headers.iter() {
             request = request.header(name, value);
         }
-        let second = request
-            .send()
-            .await
-            .map_err(|error| PayError::Http(error.to_string()))?;
+        let second = match request.send().await {
+            Ok(second) => second,
+            Err(error) => {
+                // A signed payment went out. The server may have done the work
+                // and settled before the connection dropped, so count it as
+                // spent: the session cap must never be exceeded.
+                reservation.spend();
+                return Err(PayError::Http(format!(
+                    "{error}; a signed payment for ${} was sent, so it counts \
+                     against the session cap even though no answer came back",
+                    dollars(amount)
+                )));
+            }
+        };
 
         if second.status().is_success() {
             reservation.spend();

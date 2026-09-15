@@ -159,3 +159,12 @@ No Coinbase key is needed until the move to real money.
 - `voice_id` must be letters and digits only, because it goes into the ElevenLabs address.
 - Errors map as for pictures (the shared `providers::problem`): ElevenLabs' `detail` message is passed on as 422 `provider_refused` (for example a music prompt naming an artist); 401 to 403 are 503 `provider_unavailable`; 429 is 503 `provider_busy`; anything else is 502 `provider_failed`.
 - *Not checked:* that a subscription's credits bill at the listed dollar prices, and that music works on the plan Josh picks. The two `#[ignore]` live tests (speech in the account's first voice, 5 seconds of music) settle both.
+
+## PR 6: the MCP tool (2026-09-14)
+
+- `crates/mcp`, binary `unbaked-mcp`, on `rmcp` 3.3.0 over standard input and output. Paid tools: `generate_image`, `edit_image`, `speech`, `music`, each saving into `UNBAKED_OUTPUT_DIR` under an optional plain `save_as` name. Free tools: `voices` (asks the server), and `guide`, `check`, `estimate`, `preview` (also returns the PNG so the agent can see it), `listen`, `edit`, `add`, `render`, which link layer 1 and run locally.
+- **The session cap is kept by the tool, not by `x402-reqwest`.** The tool sends the request unpaid, reads `PAYMENT-REQUIRED` itself, and takes only the `exact` entry on `eip155:84532`. It reserves that price from the session budget before signing, then signs with `x402-reqwest`'s `make_payment_headers` and a selector that refuses anything above the reserved amount. `MaxAmount` alone caps one call, not a session.
+- **What happens to the reservation:** a 2xx answer spends it. An error answer releases it, because the server settles only on success. No answer at all (the connection drops after the signed payment went out) spends it, because the server may have settled; the tool says so.
+- The wallet key is read once and never printed, including in debug output. The guide is layer 1's `docs/agents.md` at the pinned commit, copied to `crates/mcp/guide.md`.
+- Tests run the real server with the fake facilitator and fake providers on a local port. The fake facilitator does not check signatures, so the tests sign real payments with a random throwaway key made at test time; no key is in the repo.
+- *Not checked:* a real settlement on Base Sepolia. PR 7 does that.

@@ -60,9 +60,11 @@ impl Config {
             .trim_end_matches('/')
             .to_owned();
         let wallet_key = get("UNBAKED_WALLET_KEY").map(WalletKey);
-        let cap = get("UNBAKED_SESSION_CAP_USD").unwrap_or_else(|| DEFAULT_SESSION_CAP_USD.to_owned());
-        let session_cap = micro_dollars(&cap)
-            .ok_or_else(|| format!("UNBAKED_SESSION_CAP_USD {cap:?} is not a dollar amount like 1 or 0.50"))?;
+        let cap =
+            get("UNBAKED_SESSION_CAP_USD").unwrap_or_else(|| DEFAULT_SESSION_CAP_USD.to_owned());
+        let session_cap = micro_dollars(&cap).ok_or_else(|| {
+            format!("UNBAKED_SESSION_CAP_USD {cap:?} is not a dollar amount like 1 or 0.50")
+        })?;
         let output_dir = get("UNBAKED_OUTPUT_DIR")
             .unwrap_or_else(|| DEFAULT_OUTPUT_DIR.to_owned())
             .into();
@@ -103,8 +105,10 @@ mod tests {
     #[test]
     fn session_cap_is_read_in_dollars() {
         let load = |value: &str| {
-            Config::from_lookup(|name| (name == "UNBAKED_SESSION_CAP_USD").then(|| value.to_owned()))
-                .map(|c| c.session_cap)
+            Config::from_lookup(|name| {
+                (name == "UNBAKED_SESSION_CAP_USD").then(|| value.to_owned())
+            })
+            .map(|c| c.session_cap)
         };
         assert_eq!(load("2.5"), Ok(2_500_000));
         assert_eq!(load("0.000001"), Ok(1));
@@ -127,7 +131,10 @@ mod tests {
             (name == "UNBAKED_WALLET_KEY").then(|| "0xdo-not-print".to_owned())
         })
         .unwrap();
-        assert_eq!(config.wallet_key.as_ref().unwrap().expose(), "0xdo-not-print");
+        assert_eq!(
+            config.wallet_key.as_ref().unwrap().expose(),
+            "0xdo-not-print"
+        );
         assert!(!format!("{:?}", config.wallet_key).contains("do-not-print"));
     }
 
@@ -135,7 +142,7 @@ mod tests {
     fn dollars_format() {
         assert_eq!(dollars(1_000_000), "1.00");
         assert_eq!(dollars(1_500_000), "1.50");
-        assert_eq!(dollars(50_000), "0.00");
+        assert_eq!(dollars(50_000), "0.05");
         assert_eq!(dollars(250_000), "0.25");
     }
 }

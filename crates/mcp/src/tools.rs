@@ -7,16 +7,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo,
-};
+use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData, ServerHandler, schemars, tool, tool_handler, tool_router};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::fonts::FontFolder;
 use crate::local;
-use crate::pay::{PayError, Paid, Payer};
+use crate::pay::{Paid, PayError, Payer};
 
 pub struct Server {
     payer: Payer,
@@ -46,7 +44,13 @@ fn plain_name(name: &str) -> Result<(), String> {
 
 /// Writes `bytes` under `dir` as `save_as`, or `<tool>-<unix-ms>.<ext>`.
 /// Never overwrites: a name already taken gets a counter.
-fn save_bytes(dir: &Path, save_as: Option<&str>, tool: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+fn save_bytes(
+    dir: &Path,
+    save_as: Option<&str>,
+    tool: &str,
+    ext: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
     let name = match save_as {
         Some(name) => {
             plain_name(name)?;
@@ -62,7 +66,11 @@ fn save_bytes(dir: &Path, save_as: Option<&str>, tool: &str, ext: &str, bytes: &
     };
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let path = Path::new(&name);
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+    let stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     let ext = path.extension().map(|e| e.to_string_lossy().into_owned());
     let mut candidate = dir.join(&name);
     let mut n = 1u32;
@@ -184,8 +192,17 @@ impl Server {
         }
     }
 
-    #[tool(description = "Make a picture from a text prompt. Costs money; refuses over the session cap.")]
-    async fn generate_image(&self, Parameters(args): Parameters<GenerateImage>) -> Result<CallToolResult, ErrorData> {
+    pub fn payer(&self) -> &Payer {
+        &self.payer
+    }
+
+    #[tool(
+        description = "Make a picture from a text prompt. Costs money; refuses over the session cap."
+    )]
+    pub async fn generate_image(
+        &self,
+        Parameters(args): Parameters<GenerateImage>,
+    ) -> Result<CallToolResult, ErrorData> {
         let mut body = serde_json::Map::new();
         body.insert("prompt".into(), args.prompt.into());
         if let Some(v) = args.size {
@@ -201,14 +218,30 @@ impl Server {
             body.insert("background".into(), v.into());
         }
         let bytes = serde_json::to_vec(&Value::Object(body)).unwrap_or_default();
-        let ext = if args.format.as_deref() == Some("webp") { "webp" } else { "png" };
+        let ext = if args.format.as_deref() == Some("webp") {
+            "webp"
+        } else {
+            "png"
+        };
         Ok(self
-            .paid_binary("/v1/images/generate", "application/json", bytes, "generate_image", ext, args.save_as.as_deref())
+            .paid_binary(
+                "/v1/images/generate",
+                "application/json",
+                bytes,
+                "generate_image",
+                ext,
+                args.save_as.as_deref(),
+            )
             .await)
     }
 
-    #[tool(description = "Change a picture with a text prompt. Costs money; refuses over the session cap.")]
-    async fn edit_image(&self, Parameters(args): Parameters<EditImage>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        description = "Change a picture with a text prompt. Costs money; refuses over the session cap."
+    )]
+    pub async fn edit_image(
+        &self,
+        Parameters(args): Parameters<EditImage>,
+    ) -> Result<CallToolResult, ErrorData> {
         if args.images.is_empty() {
             return Ok(error("send 1 to 16 \"images\" paths"));
         }
@@ -261,14 +294,30 @@ impl Server {
         }
         body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
         let content_type = format!("multipart/form-data; boundary={BOUNDARY}");
-        let ext = if args.format.as_deref() == Some("webp") { "webp" } else { "png" };
+        let ext = if args.format.as_deref() == Some("webp") {
+            "webp"
+        } else {
+            "png"
+        };
         Ok(self
-            .paid_binary("/v1/images/edit", &content_type, body, "edit_image", ext, args.save_as.as_deref())
+            .paid_binary(
+                "/v1/images/edit",
+                &content_type,
+                body,
+                "edit_image",
+                ext,
+                args.save_as.as_deref(),
+            )
             .await)
     }
 
-    #[tool(description = "Speak text in a chosen voice as MP3. Costs money; refuses over the session cap.")]
-    async fn speech(&self, Parameters(args): Parameters<Speech>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        description = "Speak text in a chosen voice as MP3. Costs money; refuses over the session cap."
+    )]
+    pub async fn speech(
+        &self,
+        Parameters(args): Parameters<Speech>,
+    ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({
             "text": args.text,
             "voice_id": args.voice_id,
@@ -278,12 +327,24 @@ impl Server {
         });
         let bytes = serde_json::to_vec(&body).unwrap_or_default();
         Ok(self
-            .paid_binary("/v1/speech", "application/json", bytes, "speech", "mp3", args.save_as.as_deref())
+            .paid_binary(
+                "/v1/speech",
+                "application/json",
+                bytes,
+                "speech",
+                "mp3",
+                args.save_as.as_deref(),
+            )
             .await)
     }
 
-    #[tool(description = "Compose music from a prompt as MP3. Costs money; refuses over the session cap.")]
-    async fn music(&self, Parameters(args): Parameters<Music>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        description = "Compose music from a prompt as MP3. Costs money; refuses over the session cap."
+    )]
+    pub async fn music(
+        &self,
+        Parameters(args): Parameters<Music>,
+    ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({
             "prompt": args.prompt,
             "length_ms": args.length_ms,
@@ -292,12 +353,19 @@ impl Server {
         });
         let bytes = serde_json::to_vec(&body).unwrap_or_default();
         Ok(self
-            .paid_binary("/v1/music", "application/json", bytes, "music", "mp3", args.save_as.as_deref())
+            .paid_binary(
+                "/v1/music",
+                "application/json",
+                bytes,
+                "music",
+                "mp3",
+                args.save_as.as_deref(),
+            )
             .await)
     }
 
     #[tool(description = "List the voices available for the speech tool. Free.")]
-    async fn voices(&self) -> Result<CallToolResult, ErrorData> {
+    pub async fn voices(&self) -> Result<CallToolResult, ErrorData> {
         match self.payer.get("/v1/speech/voices").await {
             Ok(response) => Ok(self.answer_json(response).await),
             Err(err) => Ok(error(err.message())),
@@ -305,30 +373,48 @@ impl Server {
     }
 
     #[tool(description = "Layer 1's agent guide: how Unbaked files work. Free, local.")]
-    async fn guide(&self) -> Result<CallToolResult, ErrorData> {
+    pub async fn guide(&self) -> Result<CallToolResult, ErrorData> {
         Ok(text(local::GUIDE))
     }
 
-    #[tool(description = "Is the file's render fresh, stale, render-modified or invalid? Free, local.")]
-    async fn check(&self, Parameters(args): Parameters<PathArg>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        description = "Is the file's render fresh, stale, render-modified or invalid? Free, local."
+    )]
+    pub async fn check(
+        &self,
+        Parameters(args): Parameters<PathArg>,
+    ) -> Result<CallToolResult, ErrorData> {
         Ok(local::check(Path::new(&args.path)).map_or_else(error, json_result))
     }
 
-    #[tool(description = "How big a render is: pixels, frames, samples, and a price estimate. Free, local.")]
-    async fn estimate(&self, Parameters(args): Parameters<PathArg>) -> Result<CallToolResult, ErrorData> {
+    #[tool(
+        description = "How big a render is: pixels, frames, samples, and a price estimate. Free, local."
+    )]
+    pub async fn estimate(
+        &self,
+        Parameters(args): Parameters<PathArg>,
+    ) -> Result<CallToolResult, ErrorData> {
         Ok(local::estimate(Path::new(&args.path)).map_or_else(error, json_result))
     }
 
     #[tool(description = "Loudness and silences of the file's sound. Free, local.")]
-    async fn listen(&self, Parameters(args): Parameters<PathArg>) -> Result<CallToolResult, ErrorData> {
+    pub async fn listen(
+        &self,
+        Parameters(args): Parameters<PathArg>,
+    ) -> Result<CallToolResult, ErrorData> {
         Ok(local::listen(Path::new(&args.path)).map_or_else(error, json_result))
     }
 
     #[tool(description = "Draw one moment of an image or video recipe as a PNG. Free, local.")]
-    async fn preview(&self, Parameters(args): Parameters<PreviewArgs>) -> Result<CallToolResult, ErrorData> {
+    pub async fn preview(
+        &self,
+        Parameters(args): Parameters<PreviewArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
         let options = unbaked_render::preview::PreviewOptions {
             at_ms: args.at_ms,
-            max_edge: args.max_edge.unwrap_or_else(|| unbaked_render::preview::PreviewOptions::default().max_edge),
+            max_edge: args
+                .max_edge
+                .unwrap_or_else(|| unbaked_render::preview::PreviewOptions::default().max_edge),
             sheet: args.sheet,
         };
         let path = Path::new(&args.path);
@@ -337,7 +423,13 @@ impl Server {
             Err(err) => return Ok(error(err)),
         };
         let ext = "png";
-        let saved = match save_bytes(&self.output_dir, args.output.as_deref(), "preview", ext, &png) {
+        let saved = match save_bytes(
+            &self.output_dir,
+            args.output.as_deref(),
+            "preview",
+            ext,
+            &png,
+        ) {
             Ok(path) => path,
             Err(err) => return Ok(error(err)),
         };
@@ -352,7 +444,10 @@ impl Server {
     }
 
     #[tool(description = "Apply a JSON Patch (RFC 6902) to recipe.json. Free, local.")]
-    async fn edit(&self, Parameters(args): Parameters<EditArgs>) -> Result<CallToolResult, ErrorData> {
+    pub async fn edit(
+        &self,
+        Parameters(args): Parameters<EditArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
         let patch = serde_json::to_vec(&args.patch).unwrap_or_default();
         let path = Path::new(&args.path);
         let output = args.output.as_deref().map(Path::new);
@@ -360,18 +455,27 @@ impl Server {
     }
 
     #[tool(description = "Pack a media file as an asset and point an asset id at it. Free, local.")]
-    async fn add(&self, Parameters(args): Parameters<AddArgs>) -> Result<CallToolResult, ErrorData> {
+    pub async fn add(
+        &self,
+        Parameters(args): Parameters<AddArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
         let media = match std::fs::read(&args.media) {
             Ok(bytes) => bytes,
             Err(err) => return Ok(error(format!("{}: {err}", args.media))),
         };
         let path = Path::new(&args.path);
         let output = args.output.as_deref().map(Path::new);
-        Ok(local::add(path, &args.id, &media, args.license, output).map_or_else(error, json_result))
+        Ok(
+            local::add(path, &args.id, &media, args.license, output)
+                .map_or_else(error, json_result),
+        )
     }
 
     #[tool(description = "Render the recipe and write a fresh Unbaked file. Free, local.")]
-    async fn render(&self, Parameters(args): Parameters<RenderArgs>) -> Result<CallToolResult, ErrorData> {
+    pub async fn render(
+        &self,
+        Parameters(args): Parameters<RenderArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
         let path = Path::new(&args.path);
         let output = args.output.as_deref().map(Path::new);
         let _ = font_source(args.fonts.as_deref());
@@ -391,14 +495,19 @@ impl Server {
         ext: &str,
         save_as: Option<&str>,
     ) -> CallToolResult {
-        if let Some(name) = save_as {
-            if let Err(message) = plain_name(name) {
-                return error(message);
-            }
+        if let Some(name) = save_as
+            && let Err(message) = plain_name(name)
+        {
+            return error(message);
         }
         match self.payer.post(path, content_type, body).await {
             Ok(Paid::Free(response)) => self.answer_bytes(response, tool, ext, save_as).await,
-            Ok(Paid::Settled { response, paid, remaining, transaction }) => {
+            Ok(Paid::Settled {
+                response,
+                paid,
+                remaining,
+                transaction,
+            }) => {
                 let bytes = match response.bytes().await {
                     Ok(bytes) => bytes,
                     Err(err) => return error(err.to_string()),
@@ -423,7 +532,13 @@ impl Server {
         }
     }
 
-    async fn answer_bytes(&self, response: reqwest::Response, tool: &str, ext: &str, save_as: Option<&str>) -> CallToolResult {
+    async fn answer_bytes(
+        &self,
+        response: reqwest::Response,
+        tool: &str,
+        ext: &str,
+        save_as: Option<&str>,
+    ) -> CallToolResult {
         if !response.status().is_success() {
             return self.problem_error(response).await;
         }
@@ -432,7 +547,9 @@ impl Server {
             Err(err) => return error(err.to_string()),
         };
         match save_bytes(&self.output_dir, save_as, tool, ext, &bytes) {
-            Ok(path) => json_result(serde_json::json!({ "output": path.display().to_string(), "bytes": bytes.len() })),
+            Ok(path) => json_result(
+                serde_json::json!({ "output": path.display().to_string(), "bytes": bytes.len() }),
+            ),
             Err(message) => error(message),
         }
     }
@@ -454,7 +571,12 @@ impl Server {
             .await
             .ok()
             .and_then(|body| serde_json::from_str::<Value>(&body).ok())
-            .and_then(|value| value.get("detail").and_then(Value::as_str).map(str::to_owned))
+            .and_then(|value| {
+                value
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
             .unwrap_or_else(|| format!("the server answered {status}"));
         error(detail)
     }

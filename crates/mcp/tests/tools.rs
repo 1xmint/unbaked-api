@@ -366,3 +366,11 @@ async fn free_local_tools_work_on_the_fixture() {
     let report: serde_json::Value = serde_json::from_str(&text_of(&check_again)).unwrap();
     assert_eq!(report["status"], "fresh");
 }
+
+#[tokio::test]
+async fn the_server_introduces_itself_as_unbaked() {
+    use rmcp::ServerHandler;
+    let api = api().await;
+    let server = server(&api, "1.00", false);
+    assert_eq!(server.get_info().server_info.name, "unbaked");
+}
